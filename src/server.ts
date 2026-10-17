@@ -117,6 +117,47 @@ function createServer() {
     }
   );
 
+  server.registerTool(
+    "enable_access_protection",
+    {
+      description: "Lock this MCP server behind Cloudflare Access (email OTP). After this, only the allowed email can reach the tools.",
+      inputSchema: { email: z.string().describe("Email address allowed through Access (receives OTP codes)") },
+    },
+    async ({ email }) => {
+      const env = (globalThis as any).__CF_ENV__;
+      const accountId = (env as any).CLOUDFLARE_ACCOUNT_ID;
+      if (!accountId) throw new Error("CLOUDFLARE_ACCOUNT_ID secret is not set on this Worker.");
+
+      // 1. Create Access application for this Worker's hostname
+      const app = await cf(env, `/accounts/${accountId}/access/apps`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: "mcp-worker",
+          domain: "mcp-worker.mnoamanhussain.workers.dev",
+          type: "self_hosted",
+          session_duration: "24h",
+        }),
+      });
+
+      // 2. Create allow policy for the email (OTP via default auth methods)
+      await cf(env, `/accounts/${accountId}/access/apps/${app.id}/policies`, {
+        method: "POST",
+        body: JSON.stringify({
+          name: "owner-only",
+          decision: "allow",
+          include: [{ email: { email } }],
+        }),
+      });
+
+      return {
+        content: [{
+          type: "text",
+          text: `Access protection enabled. Only ${email} can now reach the MCP server (via email OTP). App ID: ${app.id}`,
+        }],
+      };
+    }
+  );
+
   return server;
 }
 
